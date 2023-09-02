@@ -28,6 +28,7 @@ class Alibi(nn.Module):
     def __init__(
         self, max_seq_len: int, num_heads: int, batch_size: int
     ) -> torch.Tensor:
+        """recommended usage:  create alibi mask before transformer block loop and integrate"""
         super().__init__()
 
         self.num_heads = num_heads
