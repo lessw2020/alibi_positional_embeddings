@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 import math
 
@@ -24,16 +25,23 @@ class Alibi(nn.Module):
 
     """
 
-    def __init__(self, head: int, num_heads: int) -> torch.Tensor:
+    def __init__(
+        self, max_seq_len: int, num_heads: int, batch_size: int
+    ) -> torch.Tensor:
         super().__init__()
-        self.head = head
+
         self.num_heads = num_heads
+        slopes = Tensor(self.get_slopes(num_heads))
+        self.slopes = slopes.unsqueeze(-1).unsqueeze(-1)
 
-        slopes = Tensor(self.get_slopes(head))
-        slopes = slopes.unsqueeze(-1).unsqueeze(-1)
+        self.alibi = self.slopes * torch.arange(max_seq_len).unsqueeze(0).unsqueeze(
+            0
+        ).expand(num_heads, -1, -1)
+        self.alibi = self.alibi.view(self.num_heads, 1, max_seq_len)
+        self.alibi = self.alibi.repeat(batch_size, 1, 1)  # batch_size, 1, 1
 
-        self.register_buffer("slopes", slopes, persistent=False)
-        self.register_buffer("bias", None, persistent=False)
+        # self.register_buffer("slopes", slopes, persistent=False)
+        # self.register_buffer("bias", None, persistent=False)
 
     def get_bias(self, i: int, j: int, device: torch.device) -> torch.Tensor:
         """generate the bias matrix based on the distance between q and k"""
@@ -49,9 +57,9 @@ class Alibi(nn.Module):
         return bias
 
     @staticmethod
-    def get_slopes(num_heads):
-        """for n heads, a set of slopes is the geometric sequence that starts
-        2^(-8/n) and uses this same value as its ratio
+    def get_slopes(num_heads: int) -> torch.Tensor:
+        """for n heads, a range from (0,1) and is the geometric sequence
+        that starts at 2^(-8/n) and uses this same value as its ratio
 
         example: num_heads =4
         result: [0.25, 0.0625, 0.015625, 0.00390625]
@@ -77,3 +85,27 @@ class Alibi(nn.Module):
                 : num_heads - closest_power_of_2
             ]
         )
+
+    @property
+    def device(self):
+        return next(self.buffers()).device
+
+    def pad_at_dim(t, pad, dim=-1, value=0.0):
+        dims_from_right = (-dim - 1) if dim < 0 else (t.ndim - dim - 1)
+        zeros = (0, 0) * dims_from_right
+        return F.pad(t, (*zeros, *pad), value=value)
+
+    def forward(self, i, j):
+        h, device = self.total_heads, self.device
+
+        if self.bias and self.bias.shape[-1] >= j and self.bias.shape[-2] >= i:
+            return self.bias[..., :i, :j]
+
+        bias = self.get_bias(i, j, device)
+        bias = bias * self.slopes
+
+        num_heads_unalibied = h - bias.shape[0]
+        bias = self.pad_at_dim(bias, (0, num_heads_unalibied), dim=0)
+        self.register_buffer("bias", bias, persistent=False)
+
+        return self.bias
