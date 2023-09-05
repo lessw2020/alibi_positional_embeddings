@@ -5,7 +5,7 @@ from torch import Tensor
 import math
 
 
-class Alibi(nn.Module):
+class AlibiPE(nn.Module):
     """Attention with Linear Biases (ALiBi)
 
     # Softmax(qiKT + m · [-(i - 1), ..., -2, -1, 0]),
@@ -22,20 +22,36 @@ class Alibi(nn.Module):
     """
 
     def __init__(
-        self, max_seq_len: int, num_heads: int, batch_size: int
-    ) -> torch.Tensor:
-        """recommended usage:  create alibi mask before transformer block loop and integrate"""
+        self,
+        max_seq_len: int,
+        num_heads: int,
+    ) -> None:
+        """recommended usage:  create alibi mask before transformer block loop and integrate
+        Alibi should be applied before the sqrt scaling of the attention values
+
+        Example:
+        before Transformer block loop:
+            from alibi_embeddings import AlibiPE
+            self.alibi = AlibiPE(config.max_seq_len, config.num_heads)
+        pass a reference to the alibi class to each transformer layer
+        then in forward of transformer layer:
+            alibi_mask = self.alibi.get_attention_mask(N) # N = seq length of this batch
+            ...
+            attn = q @ k.transpose( -2, -1)
+            attn += alibi_mask
+            attn *= 1.0 / math.sqrt(N)
+
+        """
         super().__init__()
 
         self.num_heads = num_heads
-        self.batch_size = batch_size
         self.max_seq_len = max_seq_len
 
         # self.causal_mask = self.build_causal_mask(self.max_seq_len, self.num_heads)
-        self.alibi_mask = self.build_alibi_mask(self.max_seq_len, self.num_heads)
-        self.register_buffer("alibi_mask", self.alibi_mask, persistent=False)
+        self.alibi_mask_base = self.build_alibi_mask(self.max_seq_len, self.num_heads)
+        self.register_buffer("alibi_mask", self.alibi_mask_base, persistent=False)
 
-    def get_alibi_mask(self, curr_seq_len: int) -> torch.tensor:
+    def get_attention_mask(self, curr_seq_len: int) -> torch.tensor:
         """returns the alibi mask, clipped to the current batch seq len"""
         return self.alibi_mask[:, :curr_seq_len, :curr_seq_len]
 
