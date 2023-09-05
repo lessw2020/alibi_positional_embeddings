@@ -16,7 +16,7 @@ class Alibi(nn.Module):
     Train Short, Test Long: Attention with Linear Biases
     Enables Input Length Extrapolation
 
-    derived from Ofir Press (author) codebase:
+    derived from Ofir Press (alibi author) codebase:
     https://github.com/ofirpress/attention_with_linear_biases
 
     """
@@ -35,7 +35,12 @@ class Alibi(nn.Module):
         self.alibi_mask = self.build_alibi_mask(self.max_seq_len, self.num_heads)
         self.register_buffer("alibi_mask", self.alibi_mask, persistent=False)
 
+    def get_alibi_mask(self, curr_seq_len: int) -> torch.tensor:
+        """returns the alibi mask, clipped to the current batch seq len"""
+        return self.alibi_mask[:, :curr_seq_len, :curr_seq_len]
+
     def build_causal_attention_mask(self, seq_len: int, num_heads: int) -> torch.Tensor:
+        """builds a generic causal attention mask"""
         causal_mask = torch.ones(seq_len, seq_len).tril()
         causal_mask = causal_mask.masked_fill(causal_mask == 0, -float("inf"))
         attn_mask = causal_mask.repeat(num_heads, 1, 1)
@@ -48,21 +53,7 @@ class Alibi(nn.Module):
         alibi_mask = distance_matrix * slope_per_head
         return alibi_mask
 
-    def get_bias(self, i: int, j: int, device: torch.device) -> torch.Tensor:
-        """generate the bias matrix based on the distance between q and k"""
-        # integer values between i-> j
-        i_range = torch.arange(j - i, j, device=device)
-        # values up to j
-        j_range = torch.arange(j, device=device)
-        # Expand dimensions to make them broadcastable
-        j_range = j_range.unsqueeze(0).unsqueeze(0)  # Shape: (1, 1, j)
-        i_range = i_range.unsqueeze(1).unsqueeze(2)  # Shape: (1, i, 1)
-
-        bias = -torch.abs(j_range - i_range)
-        return bias
-
-    @staticmethod
-    def get_slopes(num_heads: int) -> torch.Tensor:
+    def get_slopes(self, num_heads: int) -> torch.Tensor:
         """for n heads, a range from (0,1) and is the geometric sequence
         that starts at 2^(-8/n) and uses this same value as its ratio
 
@@ -90,27 +81,3 @@ class Alibi(nn.Module):
                 : num_heads - closest_power_of_2
             ]
         )
-
-    @property
-    def device(self):
-        return next(self.buffers()).device
-
-    def pad_at_dim(t, pad, dim=-1, value=0.0):
-        dims_from_right = (-dim - 1) if dim < 0 else (t.ndim - dim - 1)
-        zeros = (0, 0) * dims_from_right
-        return F.pad(t, (*zeros, *pad), value=value)
-
-    def forward(self, i, j):
-        h, device = self.total_heads, self.device
-
-        if self.bias and self.bias.shape[-1] >= j and self.bias.shape[-2] >= i:
-            return self.bias[..., :i, :j]
-
-        bias = self.get_bias(i, j, device)
-        bias = bias * self.slopes
-
-        num_heads_unalibied = h - bias.shape[0]
-        bias = self.pad_at_dim(bias, (0, num_heads_unalibied), dim=0)
-        self.register_buffer("bias", bias, persistent=False)
-
-        return self.bias
