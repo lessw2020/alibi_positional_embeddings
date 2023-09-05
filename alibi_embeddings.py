@@ -47,9 +47,12 @@ class AlibiPE(nn.Module):
         self.num_heads = num_heads
         self.max_seq_len = max_seq_len
 
-        # self.causal_mask = self.build_causal_mask(self.max_seq_len, self.num_heads)
+        self.causal_mask = self.build_causal_attention_mask(
+            self.max_seq_len, self.num_heads
+        )
         self.alibi_mask_base = self.build_alibi_mask(self.max_seq_len, self.num_heads)
-        self.register_buffer("alibi_mask", self.alibi_mask_base, persistent=False)
+        self.decoder_mask = self.causal_mask + self.alibi_mask_base
+        self.register_buffer("alibi_mask", self.decoder_mask, persistent=False)
 
     def get_attention_mask(self, curr_seq_len: int) -> torch.tensor:
         """returns the alibi mask, clipped to the current batch seq len"""
