@@ -19,10 +19,6 @@ class Alibi(nn.Module):
     derived from Ofir Press (author) codebase:
     https://github.com/ofirpress/attention_with_linear_biases
 
-    and LucidRains impl:
-    https://github.com/lucidrains/x-transformers/tree/main
-
-
     """
 
     def __init__(
@@ -32,17 +28,25 @@ class Alibi(nn.Module):
         super().__init__()
 
         self.num_heads = num_heads
-        slopes = Tensor(self.get_slopes(num_heads))
-        self.slopes = slopes.unsqueeze(-1).unsqueeze(-1)
+        self.batch_size = batch_size
+        self.max_seq_len = max_seq_len
 
-        self.alibi = self.slopes * torch.arange(max_seq_len).unsqueeze(0).unsqueeze(
-            0
-        ).expand(num_heads, -1, -1)
-        self.alibi = self.alibi.view(self.num_heads, 1, max_seq_len)
-        self.alibi = self.alibi.repeat(batch_size, 1, 1)  # batch_size, 1, 1
+        # self.causal_mask = self.build_causal_mask(self.max_seq_len, self.num_heads)
+        self.alibi_mask = self.build_alibi_mask(self.max_seq_len, self.num_heads)
+        self.register_buffer("alibi_mask", self.alibi_mask, persistent=False)
 
-        # self.register_buffer("slopes", slopes, persistent=False)
-        # self.register_buffer("bias", None, persistent=False)
+    def build_causal_attention_mask(self, seq_len: int, num_heads: int) -> torch.Tensor:
+        causal_mask = torch.ones(seq_len, seq_len).tril()
+        causal_mask = causal_mask.masked_fill(causal_mask == 0, -float("inf"))
+        attn_mask = causal_mask.repeat(num_heads, 1, 1)
+        return attn_mask
+
+    def build_alibi_mask(self, seq_len: int, num_heads: int) -> torch.Tensor:
+        """generate the alibi mask by computing a distance matrix multiplied by each head's m (slope)"""
+        distance_matrix = torch.arange(seq_len) - torch.arange(seq_len).view(-1, 1)
+        slope_per_head = Tensor(self.get_slopes(num_heads)).view(-1, 1, 1)
+        alibi_mask = distance_matrix * slope_per_head
+        return alibi_mask
 
     def get_bias(self, i: int, j: int, device: torch.device) -> torch.Tensor:
         """generate the bias matrix based on the distance between q and k"""
