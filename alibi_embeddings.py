@@ -39,7 +39,7 @@ class AlibiPE(nn.Module):
             ...
             attn = q @ k.transpose( -2, -1)
             attn += alibi_mask
-            attn *= 1.0 / math.sqrt(N)
+            attn *= 1.0 / math.sqrt(k.size(-1))
 
         """
         super().__init__()
